@@ -1,3 +1,4 @@
+require 'csv'
 require 'capybara'
 require 'capybara/poltergeist'
 
@@ -5,16 +6,10 @@ class OlarkChatScraper
   include Capybara::DSL
 
   def initialize
-    Capybara.register_driver :chrome do |app|
-      Capybara::Selenium::Driver.new(app, :browser => :chrome)
-    end
-
-    Capybara.javascript_driver = :chrome
-    # Capybara.default_driver = :poltergeist
-    # Capybara.default_driver = :selenium
+    Capybara.default_driver = :selenium
   end
 
-  def download_all
+  def chat_ids
     visit "https://olark.com"
 
     click_on 'Login'
@@ -24,27 +19,100 @@ class OlarkChatScraper
 
     click_on "View all Chat Transcripts"
 
-    page.all('.transcript-list .transcript').each do |t|
-      t.click
-      page.find('#show-convo-details').click
-      visitor_email_dt = page.find("#convo-details dt", text: "Visitor Email")
-      puts visitor_email_dt.find('+dd').text()
-      # sleep 1
-      # visitor_email = page.execute_script("$('dt:contains("Visitor Email") + dd').text()")
-      # sleep 1
-      # useful features
-      #
-      # chat_started_on
-      # transcript_id
-      # visitor_location
-      # visitor_name
-      # is_offline_message
-      # visitor_browser
-      # visitor_chat_message
-      #
-      # time_zone_difference, relative to us?
-      sleep 1
+    all_chat_ids = []
+
+    loop do
+      ids = page.all('.transcript-list a[href*="/transcripts/show/"]').map do |t|
+        id = t[:href].scan(/(?<=\/transcripts\/show\/)\w+/)
+      end
+
+      all_chat_ids << ids
+
+      click_on 'Next Page'
+      break unless page.has_content?("Next Page")
     end
+
+    all_chat_ids.flatten!
+  end
+
+  def download_all
+    f = CSV.open('olark_chat_messages', 'w')
+    f << message_features
+
+    chat_ids.each do |id|
+      visit "https://olark.com/transcripts/show/#{id}"
+      page.find('#show-convo-details').click
+
+      features_dictionary = conversation_features.inject({}) do |dict, val|
+        dict[val] = get_definition(val)
+        dict
+      end
+
+      page.all('tr[class*="_msg"]').each_with_index do |msg, index|
+        author = msg.find('.author').text()
+        message = msg.find('.message').text()
+        features_dictionary['author'] = author
+        features_dictionary['message'] = message
+        features_dictionary['position'] = index
+
+        f << rowify(features_dictionary)
+      end
+    end
+
+    f.close()
+  end
+
+  private
+
+  def rowify(feat_dict)
+    message_features.inject([]) do |row, feature|
+      row << feat_dict[feature]
+    end
+  end
+
+  def message_features
+    conversation_features | ['author', 'message', 'position']
+  end
+
+  def conversation_features
+    ["Visitor State",
+     "Is dialog?",
+     "Operator Usernames",
+     "Visitor Email",
+     "Visitor Operating System",
+     "Visitor Browser",
+     "Is Offline Message?",
+     "Visitor Country Code",
+     "Visitor ISP",
+     "Visitor IP Address",
+     "Referring URL",
+     "Start Time",
+     "Group Title",
+     "Word Count",
+     "Visitor Country",
+     "Created At",
+     "Conversation ID",
+     "Visitor ID",
+     "Visitor Browser Version",
+     "Visitor Organization",
+     "Tags",
+     "Operator Display Names",
+     "Visitor City",
+     "Visitor Name",
+     "Transcript ID",
+     "Operator IDs",
+     "Chat started on",
+     "Integration Urls",
+     "Visitor Longitude",
+     "Is Offline Message",
+     "Visitor Location",
+     "End Time",
+     "Visitor Latitude",
+     "Visitor Phone"]
+  end
+
+  def get_definition(def_tag)
+    page.evaluate_script("$('dt:contains(\"#{def_tag}\") + dd').text()")
   end
 end
 
